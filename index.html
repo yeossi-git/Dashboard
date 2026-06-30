@@ -334,7 +334,10 @@ tbody td.no-tick{font-weight:700; color:var(--azul-dark); font-feature-settings:
 
     <div class="chart-card">
       <div class="chart-header">
-        <div><h3>Distribución por Estado</h3><p>Calidad de cierre de los tickets</p></div>
+        <div>
+          <h3>Distribución por Estado</h3>
+          <p>Calidad de cierre de los tickets <span id="donutFilterBadge" style="display:none; align-items:center; gap:6px; background:linear-gradient(135deg,#AD8411,#D4A93F); color:#fff; padding:3px 10px; border-radius:14px; font-size:11px; font-weight:700; cursor:pointer; margin-left:6px; box-shadow:0 2px 6px rgba(173,132,17,.35);" onclick="toggleGroupFilter(filtroGrupoActivo)" title="Quitar filtro">🔘 <span id="donutFilterText"></span> ✕</span></p>
+        </div>
         <div class="icon-sm"><span class="ic "><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 3.07V9c1.65.31 2.95 1.62 3.26 3.26h5.92A9.93 9.93 0 0 0 13 3.07M3 12a9 9 0 0 0 9 9 9 9 0 0 0 8.94-8H15c-.46 1.72-2.02 3-3.88 3-2.21 0-4-1.79-4-4 0-1.86 1.28-3.42 3-3.88V3.05A9.01 9.01 0 0 0 3 12"/></svg></span></div>
       </div>
       <div class="donut-wrap">
@@ -479,6 +482,7 @@ function drawBarH(id, items, opts={}){
   const svg = svgEl(id, W, H);
   const max = Math.max(...items.map(d=>d.value));
   const barAreaW = W - padL - padR;
+  const interactive = (id === 'chartGrupo');
 
   // Defs gradient
   const defs = el('defs', {}, svg);
@@ -489,25 +493,37 @@ function drawBarH(id, items, opts={}){
   items.forEach((d, i)=>{
     const y = padT + i*(rowH+gap);
     const w = (d.value/max)*barAreaW;
+    const isSelected = interactive && (filtroGrupoActivo === d.label);
 
     // Label
-    el('text', {
-      x: padL - 10, y: y + rowH/2 + 4, 'text-anchor':'end', class:'axis-text-strong'
-    }, svg).textContent = d.label;
+    const lbl = el('text', {
+      x: padL - 10, y: y + rowH/2 + 4, 'text-anchor':'end',
+      class:'axis-text-strong',
+      style: isSelected ? ('fill:'+C.dorado+'; font-weight:800; cursor:pointer') : (interactive ? 'cursor:pointer' : '')
+    }, svg);
+    lbl.textContent = d.label;
 
     // Bar
     const r = el('rect', {
       x: padL, y: y, width: w, height: rowH, rx: 6, ry: 6,
-      fill: 'url(#'+id+'-g)', stroke: C.dorado, 'stroke-width': 0.8,
+      fill: isSelected ? C.dorado : 'url(#'+id+'-g)',
+      stroke: isSelected ? C.azulDark : C.dorado,
+      'stroke-width': isSelected ? 2.5 : 0.8,
       class:'bar bar-h-anim',
-      style: `animation-delay: ${i*0.05}s`
+      style: `animation-delay: ${i*0.05}s${interactive ? '; cursor:pointer' : ''}`
     }, svg);
     const title = el('title', {}, r);
-    title.textContent = d.label + ': ' + fmtNum(d.value) + ' tickets';
+    title.textContent = d.label + ': ' + fmtNum(d.value) + ' tickets' + (interactive ? ' (clic para filtrar la dona)' : '');
+
+    if(interactive){
+      r.addEventListener('click', ()=> toggleGroupFilter(d.label));
+      lbl.addEventListener('click', ()=> toggleGroupFilter(d.label));
+    }
 
     // Value text
     el('text', {
-      x: padL + w + 6, y: y + rowH/2 + 4, class:'bar-value'
+      x: padL + w + 6, y: y + rowH/2 + 4, class:'bar-value',
+      style: isSelected ? ('fill:'+C.dorado+'; font-weight:800;') : ''
     }, svg).textContent = fmtNum(d.value);
   });
 }
@@ -557,7 +573,7 @@ function drawBarV(id, items, opts={}){
 }
 
 /* DONUT */
-function drawDonut(id, items, legendId){
+function drawDonut(id, items, legendId, centerTitle){
   const W = 360, H = 320, cx = W/2, cy = H/2 + 6, R = 110, r = 70;
   const svg = svgEl(id, W, H);
   const total = items.reduce((a,b)=>a+b.value, 0);
@@ -589,9 +605,10 @@ function drawDonut(id, items, legendId){
     acc += ang;
   });
 
-  // Center text
+  // Center text (dinámico según filtro)
+  const centerLabel = (typeof centerTitle === 'string' && centerTitle) ? centerTitle : 'TOTAL TICKETS';
   el('text', {x: cx, y: cy-4, 'text-anchor':'middle', fill: C.azulDark, 'font-size':'30', 'font-weight':'800', 'font-family':'Inter'}, svg).textContent = fmtNum(total);
-  el('text', {x: cx, y: cy+18, 'text-anchor':'middle', fill: C.muted, 'font-size':'11', 'font-weight':'500', 'font-family':'Inter'}, svg).textContent = 'TOTAL TICKETS';
+  el('text', {x: cx, y: cy+18, 'text-anchor':'middle', fill: C.muted, 'font-size':'10', 'font-weight':'600', 'font-family':'Inter'}, svg).textContent = centerLabel.toUpperCase().slice(0, 32);
 
   // Legend
   const lg = document.getElementById(legendId);
@@ -656,10 +673,55 @@ function drawLine(id, items){
   });
 }
 
+/* ============ INTERACTIVIDAD: filtro entre Grupo ↔ Estado ============ */
+let filtroGrupoActivo = null;
+
+function calcEstadoForGroup(groupName){
+  const counts = {};
+  DATA.tickets.forEach(t=>{
+    if(t.grupo === groupName){
+      counts[t.estado] = (counts[t.estado]||0) + 1;
+    }
+  });
+  return DATA.por_estado
+    .map(e => ({label: e.label, value: counts[e.label] || 0}))
+    .filter(e => e.value > 0);
+}
+
+function toggleGroupFilter(groupName){
+  if(!groupName) return;
+  if(filtroGrupoActivo === groupName){
+    filtroGrupoActivo = null;
+  } else {
+    filtroGrupoActivo = groupName;
+  }
+  // Redibujar gráficos afectados
+  drawBarH('chartGrupo', DATA.por_grupo);
+  if(filtroGrupoActivo){
+    const dataFiltrada = calcEstadoForGroup(filtroGrupoActivo);
+    drawDonut('chartEstado', dataFiltrada, 'chartEstadoLegend', 'Grupo: '+filtroGrupoActivo);
+    showFilterBadge(filtroGrupoActivo);
+  } else {
+    drawDonut('chartEstado', DATA.por_estado, 'chartEstadoLegend', 'TOTAL TICKETS');
+    hideFilterBadge();
+  }
+}
+
+function showFilterBadge(groupName){
+  const b = document.getElementById('donutFilterBadge');
+  if(!b) return;
+  b.style.display = 'inline-flex';
+  document.getElementById('donutFilterText').textContent = groupName;
+}
+function hideFilterBadge(){
+  const b = document.getElementById('donutFilterBadge');
+  if(b) b.style.display = 'none';
+}
+
 /* RENDER ALL */
 drawBarH('chartGrupo', DATA.por_grupo);
 drawBarV('chartCat', DATA.por_cat);
-drawDonut('chartEstado', DATA.por_estado, 'chartEstadoLegend');
+drawDonut('chartEstado', DATA.por_estado, 'chartEstadoLegend', 'TOTAL TICKETS');
 drawLine('chartMes', DATA.por_mes);
 
 /* =================== FILTROS Y TABLA =================== */
